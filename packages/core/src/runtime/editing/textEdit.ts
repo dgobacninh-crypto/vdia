@@ -11,7 +11,7 @@ export type TextEditParams =
   | { handle: EditingElementHandle; action: "start"; caret: Point | null }
   | { handle: EditingElementHandle; action: "end"; keep: boolean };
 export type TextEditResult = { applied: boolean; html: string | null; previous: string | null };
-/** Posted to the starting port when Enter or Escape in the frame ends the session; null html was refused. */
+/** Posted to the starting port when Enter, Escape or a blur ends the session in the frame; null html was refused. */
 export type TextEditEndedEvent = {
   handle: EditingElementHandle;
   html: string | null;
@@ -104,7 +104,7 @@ export function endTextEdit(): void {
   close(false);
 }
 
-function caretRangeAt(doc: Document, at: Point): Range | null {
+export function caretRangeAt(doc: Document, at: Point): Range | null {
   const legacy = doc as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null };
   if (typeof legacy.caretRangeFromPoint === "function")
     return legacy.caretRangeFromPoint(at.x, at.y);
@@ -132,12 +132,7 @@ function placeCaret(element: Editable, at: Point | null): void {
   selection.addRange(range);
 }
 
-function listen(element: Editable, endInFrame: () => void): () => void {
-  const onKeyDown = (event: KeyboardEvent) => {
-    if ((event.key !== "Enter" || event.shiftKey) && event.key !== "Escape") return;
-    event.preventDefault();
-    endInFrame();
-  };
+export function takePlainTextOnly(element: HTMLElement): () => void {
   const insertPlainText = (text: string | undefined) => {
     if (text) element.ownerDocument.execCommand("insertText", false, text);
   };
@@ -150,22 +145,35 @@ function listen(element: Editable, endInFrame: () => void): () => void {
     event.preventDefault();
     insertPlainText(event.dataTransfer?.getData("text/plain"));
   };
+  element.addEventListener("paste", onPaste);
+  element.addEventListener("dragover", onDragOver);
+  element.addEventListener("drop", onDrop);
+  return () => {
+    element.removeEventListener("paste", onPaste);
+    element.removeEventListener("dragover", onDragOver);
+    element.removeEventListener("drop", onDrop);
+  };
+}
+
+function listen(element: Editable, endInFrame: () => void): () => void {
+  const onKeyDown = (event: KeyboardEvent) => {
+    if ((event.key !== "Enter" || event.shiftKey) && event.key !== "Escape") return;
+    event.preventDefault();
+    endInFrame();
+  };
   const removed = new MutationObserver(() => {
     if (!element.isConnected) close(false);
   });
   removed.observe(element.ownerDocument, { childList: true, subtree: true });
   const view = element.ownerDocument.defaultView;
-  const events = [
-    ["keydown", onKeyDown],
-    ["paste", onPaste],
-    ["dragover", onDragOver],
-    ["drop", onDrop],
-  ] as const;
-  for (const [type, listener] of events) element.addEventListener(type, listener as EventListener);
+  const releasePlainText = takePlainTextOnly(element);
+  element.addEventListener("keydown", onKeyDown);
+  element.addEventListener("blur", endInFrame);
   view?.addEventListener("pagehide", endTextEdit);
   return () => {
-    for (const [type, listener] of events)
-      element.removeEventListener(type, listener as EventListener);
+    releasePlainText();
+    element.removeEventListener("keydown", onKeyDown);
+    element.removeEventListener("blur", endInFrame);
     view?.removeEventListener("pagehide", endTextEdit);
     removed.disconnect();
   };
