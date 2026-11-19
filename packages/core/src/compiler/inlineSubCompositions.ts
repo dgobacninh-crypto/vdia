@@ -1,4 +1,8 @@
-import { SVG_REFERENCE_ALIASES_ATTR, readSvgReferenceAliases } from "./svgSelectorAliases";
+import {
+  SVG_REFERENCE_ALIASES_ATTR,
+  readSvgReferenceAliases,
+  type SvgReferenceAlias,
+} from "./svgSelectorAliases";
 import { readExternalScriptAttributes, type ExternalScriptAttributes } from "./externalScripts";
 import { parseImportMap, type ImportMap } from "./importMaps";
 import {
@@ -37,6 +41,7 @@ import {
   namespaceCollidingSvgIds,
   sceneClipRoots,
   rewriteSvgIdReferencesInCss,
+  type SvgIdMap,
   type SvgIdScope,
 } from "./svgIdNamespacing";
 import {
@@ -844,9 +849,18 @@ export function inlineSubCompositions(
     chargeEmitted &&
       ((index, bytes) => chargeEmitted(svgIdScopes[index]?.src ?? "the page", bytes)),
   );
-  const chargeGrowth = (src: string, before: string, after: string) => {
-    if (after.length > before.length) chargeEmitted?.(src, after.length - before.length);
-  };
+  const rewriteCss = (
+    src: string,
+    css: string,
+    idMap: SvgIdMap,
+    references: readonly SvgReferenceAlias[],
+  ) =>
+    rewriteSvgIdReferencesInCss(
+      css,
+      idMap,
+      references,
+      chargeEmitted && ((bytes) => chargeEmitted(src, bytes)),
+    );
   svgIdMaps.slice(0, svgIdScopes.length).forEach((idMap, index) => {
     const { styleStart, styleEnd } = svgIdScopes[index]!;
     const references = readSvgReferenceAliases(
@@ -854,9 +868,7 @@ export function inlineSubCompositions(
       SVG_REFERENCE_ALIASES_ATTR,
     );
     for (let i = styleStart; i < styleEnd; i += 1) {
-      const rewritten = rewriteSvgIdReferencesInCss(styles[i]!.css, idMap, references);
-      chargeGrowth(svgIdScopes[index]!.src, styles[i]!.css, rewritten);
-      styles[i]!.css = rewritten;
+      styles[i]!.css = rewriteCss(svgIdScopes[index]!.src, styles[i]!.css, idMap, references);
     }
   });
 
@@ -866,13 +878,7 @@ export function inlineSubCompositions(
   );
   for (const style of rootStyles) {
     const css = style.textContent ?? "";
-    const rewritten = rewriteSvgIdReferencesInCss(
-      css,
-      svgIdMaps[svgIdScopes.length]!,
-      rootReferences,
-    );
-    chargeGrowth("the page", css, rewritten);
-    style.textContent = rewritten;
+    style.textContent = rewriteCss("the page", css, svgIdMaps[svgIdScopes.length]!, rootReferences);
   }
 
   return {
